@@ -1,0 +1,209 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: CloudTask Serverless Task Management API
+
+Parameters:
+  DynamoDBEndpoint:
+    Type: String
+    Default: ""
+    Description: Optional DynamoDB endpoint for local development
+
+Globals:
+  Function:
+    Timeout: 10
+    MemorySize: 128
+    Runtime: python3.14
+    Architectures:
+      - x86_64
+    LoggingConfig:
+      LogFormat: JSON
+
+Resources:
+
+  # --------------------------------------------------
+  # COGNITO USER POOL
+  # --------------------------------------------------
+
+  CloudTaskUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: CloudTaskUsers
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+
+  # --------------------------------------------------
+  # COGNITO APP CLIENT
+  # --------------------------------------------------
+
+  CloudTaskUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: CloudTaskWebClient
+      UserPoolId: !Ref CloudTaskUserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+
+  # --------------------------------------------------
+  # API GATEWAY WITH COGNITO AUTHORIZER
+  # --------------------------------------------------
+
+  CloudTaskApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: Prod
+      Auth:
+        DefaultAuthorizer: CloudTaskCognitoAuthorizer
+        Authorizers:
+          CloudTaskCognitoAuthorizer:
+            UserPoolArn: !GetAtt CloudTaskUserPool.Arn
+
+  # --------------------------------------------------
+  # DYNAMODB TABLE
+  # --------------------------------------------------
+
+  CloudTaskTasks:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: CloudTaskTasks
+      BillingMode: PAY_PER_REQUEST
+      DeletionProtectionEnabled: false
+      AttributeDefinitions:
+        - AttributeName: user_id
+          AttributeType: S
+        - AttributeName: task_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: user_id
+          KeyType: HASH
+        - AttributeName: task_id
+          KeyType: RANGE
+
+  # --------------------------------------------------
+  # LAMBDA FUNCTION
+  # --------------------------------------------------
+
+  HelloWorldFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: hello_world/
+      Handler: app.lambda_handler
+
+      Environment:
+        Variables:
+          TASKS_TABLE: !Ref CloudTaskTasks
+          DYNAMODB_ENDPOINT_URL: !Ref DynamoDBEndpoint
+
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:Query
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+                - dynamodb:DeleteItem
+              Resource: !GetAtt CloudTaskTasks.Arn
+
+      Events:
+
+        HealthCheck:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CloudTaskApi
+            Path: /health
+            Method: GET
+            Auth:
+              Authorizer: NONE
+
+        CreateTask:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CloudTaskApi
+            Path: /tasks
+            Method: POST
+
+        ListTasks:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CloudTaskApi
+            Path: /tasks
+            Method: GET
+
+        GetTask:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CloudTaskApi
+            Path: /tasks/{task_id}
+            Method: GET
+
+        UpdateTask:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CloudTaskApi
+            Path: /tasks/{task_id}
+            Method: PUT
+
+        DeleteTask:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CloudTaskApi
+            Path: /tasks/{task_id}
+            Method: DELETE
+
+  CloudTaskLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${HelloWorldFunction}"
+      RetentionInDays: 7
+# --------------------------------------------------
+# OUTPUTS
+# --------------------------------------------------
+
+Outputs:
+
+  CloudTaskApiUrl:
+    Description: CloudTask API endpoint
+    Value: !Sub "https://${CloudTaskApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/Prod/"
+
+  CloudTaskFunction:
+    Description: CloudTask Lambda ARN
+    Value: !GetAtt HelloWorldFunction.Arn
+
+  CloudTaskTable:
+    Description: CloudTask DynamoDB table
+    Value: !Ref CloudTaskTasks
+
+  CognitoUserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref CloudTaskUserPool
+
+  CognitoUserPoolClientId:
+    Description: Cognito App Client ID
+    Value: !Ref CloudTaskUserPoolClient

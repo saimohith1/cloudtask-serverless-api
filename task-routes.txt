@@ -1,0 +1,17 @@
+        GetTask:
+          Type: Api
+          Properties:
+            Path: /tasks/{task_id}
+            Method: GET
+
+        UpdateTask:
+          Type: Api
+          Properties:
+            Path: /tasks/{task_id}
+            Method: PUT
+
+        DeleteTask:
+          Type: Api
+          Properties:
+            Path: /tasks/{task_id}
+            Method: DELETE
